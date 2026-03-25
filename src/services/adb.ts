@@ -69,10 +69,9 @@ class AdbService {
     const Adb = adbModule.Adb;
 
     // The @yume-chan/adb library expects keys as { buffer: Uint8Array, name?: string }
-    // where buffer is a PKCS#1 DER-encoded RSA 2048-bit private key.
-    // Web Crypto exports PKCS#8 which has a 26-byte header before the PKCS#1 data.
-    const PKCS8_HEADER_LENGTH = 26;
-
+    // where buffer is the FULL PKCS#8 DER-encoded RSA 2048-bit private key.
+    // The library's hardcoded offsets (N at byte 38, D at byte 303) account for
+    // the 26-byte PKCS#8 header + PKCS#1 structure offsets.
     const generateKey = async () => {
       const keyPair = await crypto.subtle.generateKey(
         {
@@ -84,10 +83,9 @@ class AdbService {
         true,
         ['sign', 'verify']
       );
-      // Export as PKCS#8 DER and strip header to get PKCS#1
+      // Export as PKCS#8 DER — pass the full buffer, not stripped
       const pkcs8 = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
-      const pkcs1 = new Uint8Array(pkcs8, PKCS8_HEADER_LENGTH);
-      return { buffer: pkcs1, name: 'kosherflip@browser' };
+      return { buffer: new Uint8Array(pkcs8), name: 'kosherflip@browser' };
     };
 
     // Store/retrieve keys as base64-encoded PKCS#1 DER in localStorage
