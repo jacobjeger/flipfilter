@@ -163,23 +163,20 @@ class AdbService {
   async shell(command: string): Promise<string> {
     if (!this.adb) throw new Error('Not connected');
 
-    const process = await this.adb.subprocess.spawn(command);
-    let output = '';
-    const reader = process.stdout.getReader();
-
+    // Use createSocketAndWait for shell commands — more reliable than subprocess
+    // which can break when private fields are transpiled by Next.js bundler
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          output += typeof value === 'string' ? value : new TextDecoder().decode(value);
-        }
+      const output = await this.adb.createSocketAndWait(`shell:${command}`);
+      return output.trim();
+    } catch {
+      // Fallback: try spawnAndWaitLegacy (uses the "none" protocol)
+      try {
+        const output = await this.adb.subprocess.spawnAndWaitLegacy(command);
+        return output.trim();
+      } catch (err: any) {
+        throw new Error(`Shell command failed: ${err.message || err}`);
       }
-    } finally {
-      reader.releaseLock();
     }
-
-    return output.trim();
   }
 
   async runCommand(command: string): Promise<AdbCommandResult> {
