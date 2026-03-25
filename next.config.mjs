@@ -22,9 +22,12 @@ const nextConfig = {
   transpilePackages: [
     '@yume-chan/adb',
     '@yume-chan/adb-daemon-webusb',
+    '@yume-chan/adb-credential-web',
     '@yume-chan/stream-extra',
     '@yume-chan/struct',
     '@yume-chan/event',
+    '@yume-chan/async',
+    '@yume-chan/no-data-view',
   ],
 };
 

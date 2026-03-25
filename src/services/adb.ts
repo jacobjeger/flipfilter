@@ -1,9 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 /**
- * ADB Service — wraps @yume-chan/adb for browser-based WebUSB ADB communication.
+ * ADB Service — wraps @yume-chan/adb v0.0.24 for browser-based WebUSB ADB communication.
  * All ADB operations go through this service.
- * Uses dynamic imports and `any` types to handle API differences across @yume-chan/adb versions.
  */
 
 export interface PhoneInfo {
@@ -36,6 +35,7 @@ export interface HealthCheckResult {
 
 class AdbService {
   private device: any = null;
+  private usbDevice: USBDevice | null = null;
   private transport: any = null;
   private adb: any = null;
   private _connected = false;
@@ -53,32 +53,85 @@ class AdbService {
       throw new Error('WebUSB not supported. Please use Chrome or Edge.');
     }
 
+    // Clean up any previous connection first
+    await this.disconnect();
+
+    // Step 1: Import modules
     const webUsbModule: any = await import('@yume-chan/adb-daemon-webusb');
     const adbModule: any = await import('@yume-chan/adb');
+    const credModule: any = await import('@yume-chan/adb-credential-web');
 
     const AdbDaemonWebUsbDeviceManager = webUsbModule.AdbDaemonWebUsbDeviceManager;
-    const manager = new AdbDaemonWebUsbDeviceManager(navigator.usb);
-    this.device = await manager.requestDevice();
+    const AdbDaemonTransport = adbModule.AdbDaemonTransport;
+    const Adb = adbModule.Adb;
+    const AdbWebCredentialStore = credModule.default;
 
+    // Step 2: Request USB device
+    const manager = AdbDaemonWebUsbDeviceManager.BROWSER;
+    if (!manager) {
+      throw new Error('WebUSB not available. Use Chrome or Edge.');
+    }
+
+    this.device = await manager.requestDevice();
     if (!this.device) {
       throw new Error('No device selected');
     }
 
-    const connection = await this.device.connect();
-    const AdbDaemonTransport = adbModule.AdbDaemonTransport;
-    const Adb = adbModule.Adb;
+    // Keep reference to raw USB device for cleanup
+    this.usbDevice = this.device.raw;
 
-    // Use the official @yume-chan/adb-credential-web store
-    // It generates PKCS#8 RSA keys via Web Crypto and stores them in IndexedDB
-    const AdbWebCredentialStore = (await import('@yume-chan/adb-credential-web')).default;
+    // Step 3: Connect to USB device (claim interface)
+    let connection: any;
+    try {
+      connection = await this.device.connect();
+    } catch (err: any) {
+      // If device is busy, try to release it first
+      if (err.message?.includes('claimed') || err.message?.includes('use') || err.name === 'NetworkError') {
+        try {
+          if (this.usbDevice?.opened) {
+            await this.usbDevice.close();
+          }
+          await this.usbDevice?.open();
+          // Retry
+          connection = await this.device.connect();
+        } catch {
+          throw new Error(
+            'Device is in use by another program. Please:\n' +
+            '1. Close any other browser tabs using WebUSB\n' +
+            '2. Run "adb kill-server" in your terminal\n' +
+            '3. Unplug and replug the phone\n' +
+            '4. Try again'
+          );
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    // Step 4: Authenticate with ADB daemon
     const credentialStore = new AdbWebCredentialStore('KosherFlip');
 
-    this.transport = await AdbDaemonTransport.authenticate({
-      serial: this.device.serial,
-      connection,
-      credentialStore,
-    });
+    try {
+      this.transport = await AdbDaemonTransport.authenticate({
+        serial: this.device.serial,
+        connection,
+        credentialStore,
+      });
+    } catch (err: any) {
+      // Provide helpful error message
+      const msg = err.message || String(err);
+      if (msg.includes('No authenticator')) {
+        throw new Error(
+          'ADB authentication failed. Please check:\n' +
+          '1. USB Debugging is enabled on the phone\n' +
+          '2. Accept the "Allow USB debugging" prompt on the phone\n' +
+          '3. Try disconnecting and reconnecting'
+        );
+      }
+      throw new Error(`ADB authentication error: ${msg}`);
+    }
 
+    // Step 5: Create ADB instance
     this.adb = new Adb(this.transport);
     this._connected = true;
 
@@ -86,10 +139,22 @@ class AdbService {
   }
 
   async disconnect(): Promise<void> {
-    if (this.transport) {
-      await this.transport.close();
+    try {
+      if (this.transport) {
+        await this.transport.close().catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+    try {
+      if (this.usbDevice?.opened) {
+        await this.usbDevice.close().catch(() => {});
+      }
+    } catch {
+      // ignore
     }
     this.device = null;
+    this.usbDevice = null;
     this.transport = null;
     this.adb = null;
     this._connected = false;
