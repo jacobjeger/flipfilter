@@ -9,9 +9,10 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@yume-chan/adb": "^2.5.1",
-    "@yume-chan/adb-daemon-webusb": "^2.3.2",
-    "@yume-chan/stream-extra": "^2.5.3",
+    "@yume-chan/adb": "^0.0.24",
+    "@yume-chan/adb-credential-web": "^0.0.24",
+    "@yume-chan/adb-daemon-webusb": "^0.0.24",
+    "@yume-chan/stream-extra": "^0.0.24",
     "jspdf": "^4.2.1",
     "next": "14.2.35",
     "qrcode": "^1.5.4",
