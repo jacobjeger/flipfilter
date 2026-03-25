@@ -27,6 +27,8 @@ function MainContent() {
       </main>
       <footer className="bg-white border-t border-gray-100 py-4 text-center text-xs text-gray-400">
         KosherFlip v1.0 — Free &amp; open source. No data sent anywhere. Everything runs in your browser.
+        <span className="mx-2">|</span>
+        <a href="https://github.com/jacobjeger/flipfilter" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-600 underline">GitHub</a>
       </footer>
     </div>
   );
