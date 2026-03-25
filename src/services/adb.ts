@@ -68,59 +68,15 @@ class AdbService {
     const AdbDaemonTransport = adbModule.AdbDaemonTransport;
     const Adb = adbModule.Adb;
 
-    // The @yume-chan/adb library expects keys as { buffer: Uint8Array, name?: string }
-    // where buffer is the FULL PKCS#8 DER-encoded RSA 2048-bit private key.
-    // The library's hardcoded offsets (N at byte 38, D at byte 303) account for
-    // the 26-byte PKCS#8 header + PKCS#1 structure offsets.
-    const generateKey = async () => {
-      const keyPair = await crypto.subtle.generateKey(
-        {
-          name: 'RSASSA-PKCS1-v1_5',
-          modulusLength: 2048,
-          publicExponent: new Uint8Array([1, 0, 1]),
-          hash: 'SHA-1',
-        },
-        true,
-        ['sign', 'verify']
-      );
-      // Export as PKCS#8 DER — pass the full buffer, not stripped
-      const pkcs8 = await crypto.subtle.exportKey('pkcs8', keyPair.privateKey);
-      return { buffer: new Uint8Array(pkcs8), name: 'kosherflip@browser' };
-    };
-
-    // Store/retrieve keys as base64-encoded PKCS#1 DER in localStorage
-    const ADB_KEY_STORAGE = 'kosherflip_adb_key';
+    // Use the official @yume-chan/adb-credential-web store
+    // It generates PKCS#8 RSA keys via Web Crypto and stores them in IndexedDB
+    const AdbWebCredentialStore = (await import('@yume-chan/adb-credential-web')).default;
+    const credentialStore = new AdbWebCredentialStore('KosherFlip');
 
     this.transport = await AdbDaemonTransport.authenticate({
       serial: this.device.serial,
       connection,
-      credentialStore: {
-        generateKey,
-        iterateKeys: async function* (): AsyncGenerator<any> {
-          const stored = localStorage.getItem(ADB_KEY_STORAGE);
-          if (stored) {
-            try {
-              const raw = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
-              yield { buffer: raw, name: 'kosherflip@browser' };
-            } catch {
-              // corrupted key, ignore — will generate new one
-            }
-          }
-        },
-        saveKey: async (key: any) => {
-          try {
-            const bytes: Uint8Array = key.buffer;
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const b64 = btoa(binary);
-            localStorage.setItem(ADB_KEY_STORAGE, b64);
-          } catch {
-            // ignore storage errors
-          }
-        },
-      },
+      credentialStore,
     });
 
     this.adb = new Adb(this.transport);
