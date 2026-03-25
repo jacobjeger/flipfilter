@@ -129,15 +129,8 @@ export default function SetupWizard() {
   const setDeviceOwner = async () => {
     setLoading(true);
     try {
-      // Sideload guardian APK first
-      addLog('Sideloading KosherFlip Guardian APK...');
-      const apkResult = await adbService.sideloadApkFromUrl('/kosherflip-guardian.apk');
-
-      if (!apkResult.success) {
-        addLog(`Guardian APK install note: ${apkResult.error || 'May need manual install'}`);
-      } else {
-        addLog('Guardian APK installed');
-      }
+      // Guardian APK would be sideloaded here if available
+      addLog('Note: Guardian APK must be manually sideloaded via Tools panel if needed');
 
       // Set device owner
       const result = await adbService.setDeviceOwner('com.kosherflip/.AdminReceiver');
@@ -205,25 +198,12 @@ export default function SetupWizard() {
   };
 
   const installApps = async () => {
-    setLoading(true);
-    try {
-      addLog('Installing Waze...');
-      const wazeResult = await adbService.sideloadApkFromUrl('/waze.apk');
-      addLog(`Waze: ${wazeResult.success ? 'OK' : wazeResult.error}`);
-
-      addLog('Installing MATVT...');
-      const matvtResult = await adbService.sideloadApkFromUrl('/matvt.apk');
-      addLog(`MATVT: ${matvtResult.success ? 'OK' : matvtResult.error}`);
-
-      updateStepResult(9, {
-        status: wazeResult.success && matvtResult.success ? 'success' : 'warning',
-        message: 'App installation completed'
-      });
-    } catch (err: any) {
-      updateStepResult(9, { status: 'error', message: err.message });
-    } finally {
-      setLoading(false);
-    }
+    // App installation is handled via file upload — mark step as ready
+    updateStepResult(9, {
+      status: 'success',
+      message: 'Use the Tools panel to sideload Waze and MATVT APKs from your computer'
+    });
+    addLog('Step 10: Use Tools > Install Waze / Install MATVT to sideload APKs');
   };
 
   const renderHealthCheckResults = (check: typeof preHealthCheck) => {

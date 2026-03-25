@@ -263,41 +263,46 @@ export default function ToolsPanel() {
 
   const contactInputRef = useRef<HTMLInputElement>(null);
   const restoreInputRef = useRef<HTMLInputElement>(null);
+  const wazeInputRef = useRef<HTMLInputElement>(null);
+  const matvtInputRef = useRef<HTMLInputElement>(null);
 
   // ------- Actions -------
 
-  const handleInstallWaze = async () => {
-    wazeCtl.start();
-    addLog('Installing Waze...');
+  const handleInstallApk = async (
+    file: File,
+    name: string,
+    ctl: ReturnType<typeof useToolState>[1],
+  ) => {
+    ctl.start();
+    addLog(`Installing ${name}...`);
     try {
-      const result = await adbService.sideloadApkFromUrl('/waze.apk');
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) {
+        throw new Error('APK file is empty');
+      }
+      const result = await adbService.installApk(apkData);
       if (result.success) {
-        wazeCtl.ok('Waze installed successfully');
-        addLog('Waze installed');
+        ctl.ok(`${name} installed successfully`);
+        addLog(`${name} installed`);
       } else {
         throw new Error(result.error || 'Install failed');
       }
     } catch (err: any) {
-      wazeCtl.fail(err.message || 'Failed to install Waze');
-      addLog(`Waze install failed: ${err.message}`);
+      ctl.fail(err.message || `Failed to install ${name}`);
+      addLog(`${name} install failed: ${err.message}`);
     }
   };
 
-  const handleInstallMatvt = async () => {
-    matvtCtl.start();
-    addLog('Installing MATVT Cursor...');
-    try {
-      const result = await adbService.sideloadApkFromUrl('/matvt.apk');
-      if (result.success) {
-        matvtCtl.ok('MATVT Cursor installed successfully');
-        addLog('MATVT Cursor installed');
-      } else {
-        throw new Error(result.error || 'Install failed');
-      }
-    } catch (err: any) {
-      matvtCtl.fail(err.message || 'Failed to install MATVT Cursor');
-      addLog(`MATVT install failed: ${err.message}`);
-    }
+  const handleWazeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleInstallApk(file, 'Waze', wazeCtl);
+    if (wazeInputRef.current) wazeInputRef.current.value = '';
+  };
+
+  const handleMatvtFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handleInstallApk(file, 'MATVT Cursor', matvtCtl);
+    if (matvtInputRef.current) matvtInputRef.current.value = '';
   };
 
   const handleImportContacts = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -513,11 +518,22 @@ export default function ToolsPanel() {
         {/* 1. Install Waze */}
         <ToolCard
           title="Install Waze"
-          description="Sideload the Waze navigation app onto the connected device."
+          description="Select a Waze APK file from your computer to sideload onto the device."
           disabled={!connected}
         >
-          <ActionButton onClick={handleInstallWaze} disabled={wazeState.loading}>
-            {wazeState.loading ? 'Installing...' : 'Install Waze'}
+          <input
+            ref={wazeInputRef}
+            type="file"
+            accept=".apk"
+            onChange={handleWazeFile}
+            className="hidden"
+            id="waze-apk-input"
+          />
+          <ActionButton
+            onClick={() => wazeInputRef.current?.click()}
+            disabled={wazeState.loading}
+          >
+            {wazeState.loading ? 'Installing...' : 'Select Waze APK'}
           </ActionButton>
           <Feedback state={wazeState} />
         </ToolCard>
@@ -525,11 +541,22 @@ export default function ToolsPanel() {
         {/* 2. Install MATVT Cursor */}
         <ToolCard
           title="Install MATVT Cursor"
-          description="Sideload the MATVT mouse cursor accessibility tool."
+          description="Select a MATVT APK file from your computer to sideload onto the device."
           disabled={!connected}
         >
-          <ActionButton onClick={handleInstallMatvt} disabled={matvtState.loading}>
-            {matvtState.loading ? 'Installing...' : 'Install MATVT Cursor'}
+          <input
+            ref={matvtInputRef}
+            type="file"
+            accept=".apk"
+            onChange={handleMatvtFile}
+            className="hidden"
+            id="matvt-apk-input"
+          />
+          <ActionButton
+            onClick={() => matvtInputRef.current?.click()}
+            disabled={matvtState.loading}
+          >
+            {matvtState.loading ? 'Installing...' : 'Select MATVT APK'}
           </ActionButton>
           <Feedback state={matvtState} />
         </ToolCard>
