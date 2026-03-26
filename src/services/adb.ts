@@ -172,28 +172,25 @@ class AdbService {
   async shell(command: string): Promise<string> {
     if (!this.adb) throw new Error('Not connected');
 
-    const decoder = new TextDecoder();
     const timeout = 15000; // 15s per command
 
-    // Use createSocketAndWait for shell commands — more reliable than subprocess
-    // which can break when private fields are transpiled by Next.js bundler
+    // Use exec: protocol — runs the command and closes the socket when done.
+    // Unlike shell: which keeps the socket open (causing hangs with pm uninstall etc.),
+    // exec: behaves like a proper subprocess.
     try {
-      const output: any = await this.withTimeout(
-        this.adb.createSocketAndWait(`shell:${command}`),
+      const output: string = await this.withTimeout(
+        this.adb.createSocketAndWait(`exec:${command}`),
         timeout,
       );
-      // createSocketAndWait may return Uint8Array or string depending on version
-      const text = typeof output === 'string' ? output : decoder.decode(output as Uint8Array);
-      return text.trim();
+      return output.trim();
     } catch {
-      // Fallback: try spawnAndWaitLegacy (uses the "none" protocol)
+      // Fallback: try shell: protocol (works for simpler commands like getprop)
       try {
-        const output: any = await this.withTimeout(
-          this.adb.subprocess.spawnAndWaitLegacy(command),
+        const output: string = await this.withTimeout(
+          this.adb.createSocketAndWait(`shell:${command}`),
           timeout,
-        );
-        const text = typeof output === 'string' ? output : decoder.decode(output as Uint8Array);
-        return text.trim();
+        )
+        return output.trim();
       } catch (err: any) {
         throw new Error(`Shell command failed: ${err.message || err}`);
       }
