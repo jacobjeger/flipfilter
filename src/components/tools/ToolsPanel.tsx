@@ -123,6 +123,7 @@ export default function ToolsPanel() {
   // Per-tool states
   const [wazeState, wazeCtl] = useToolState();
   const [matvtState, matvtCtl] = useToolState();
+  const [customApkState, customApkCtl] = useToolState();
   const [contactState, contactCtl] = useToolState();
   const [backupState, backupCtl] = useToolState();
   const [restoreState, restoreCtl] = useToolState();
@@ -153,6 +154,7 @@ export default function ToolsPanel() {
   const restoreInputRef = useRef<HTMLInputElement>(null);
   const wazeInputRef = useRef<HTMLInputElement>(null);
   const matvtInputRef = useRef<HTMLInputElement>(null);
+  const customApkInputRef = useRef<HTMLInputElement>(null);
 
   // ------- Actions -------
 
@@ -179,6 +181,14 @@ export default function ToolsPanel() {
       ctl.fail(err.message || `Failed to install ${name}`);
       addLog(`${name} install failed: ${err.message}`);
     }
+  };
+
+  const handleCustomApkFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const name = file.name.replace(/\.apk$/i, '');
+    await handleInstallApk(file, name, customApkCtl);
+    if (customApkInputRef.current) customApkInputRef.current.value = '';
   };
 
   const handleWazeFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -617,7 +627,30 @@ export default function ToolsPanel() {
           <Feedback state={matvtState} />
         </ToolCard>
 
-        {/* 3. Import Contacts */}
+        {/* 3. Install Any App */}
+        <ToolCard
+          title="Install App"
+          description="Sideload any APK file onto the connected device."
+          disabled={!connected}
+        >
+          <input
+            ref={customApkInputRef}
+            type="file"
+            accept=".apk"
+            onChange={handleCustomApkFile}
+            className="hidden"
+            id="custom-apk-input"
+          />
+          <ActionButton
+            onClick={() => customApkInputRef.current?.click()}
+            disabled={customApkState.loading}
+          >
+            {customApkState.loading ? 'Installing...' : 'Select APK File'}
+          </ActionButton>
+          <Feedback state={customApkState} />
+        </ToolCard>
+
+        {/* 4. Import Contacts */}
         <ToolCard
           title="Import Contacts"
           description="Upload a CSV file to import contacts onto the device in VCF format."
