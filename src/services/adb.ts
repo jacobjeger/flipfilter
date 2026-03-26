@@ -254,6 +254,18 @@ class AdbService {
       .filter(Boolean);
   }
 
+  async enterMaintenanceMode(): Promise<AdbCommandResult> {
+    return this.runCommand(
+      'am broadcast -a com.kosherflip.MAINTENANCE_MODE --ez unlock true -n com.kosherflip/.MaintenanceReceiver'
+    );
+  }
+
+  async exitMaintenanceMode(): Promise<AdbCommandResult> {
+    return this.runCommand(
+      'am broadcast -a com.kosherflip.MAINTENANCE_MODE --ez unlock false -n com.kosherflip/.MaintenanceReceiver'
+    );
+  }
+
   async uninstallPackage(packageName: string): Promise<AdbCommandResult> {
     return this.runCommand(`pm uninstall --user 0 ${packageName}`);
   }

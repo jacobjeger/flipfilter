@@ -27,6 +27,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- Maintenance receiver — toggle restrictions via ADB broadcast -->
+        <receiver
+            android:name=".MaintenanceReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.kosherflip.MAINTENANCE_MODE" />
+            </intent-filter>
+        </receiver>
+
         <!--
             No launcher activity — this app is completely hidden.
             It only runs as a Device Owner to enforce restrictions.
