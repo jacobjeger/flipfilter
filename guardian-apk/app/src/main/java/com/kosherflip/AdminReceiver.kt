@@ -95,11 +95,10 @@ class AdminReceiver : DeviceAdminReceiver() {
             // Block adding new users
             dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_USER)
 
-            // Block app installs from Play Store or anywhere
-            dpm.addUserRestriction(admin, UserManager.DISALLOW_INSTALL_APPS)
-
-            // Block app uninstalls (prevent user from restoring removed apps)
-            dpm.addUserRestriction(admin, UserManager.DISALLOW_UNINSTALL_APPS)
+            // Note: We intentionally do NOT set DISALLOW_INSTALL_APPS or
+            // DISALLOW_UNINSTALL_APPS — those block ADB-based app management
+            // via KosherFlip. The phone is still protected by
+            // DISALLOW_INSTALL_UNKNOWN_SOURCES + disabled package installer.
 
             // Block modifying accounts (prevent adding Google account)
             dpm.addUserRestriction(admin, UserManager.DISALLOW_MODIFY_ACCOUNTS)
