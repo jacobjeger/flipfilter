@@ -307,9 +307,30 @@ export default function ToolsPanel() {
     if (wazeInputRef.current) wazeInputRef.current.value = '';
   };
 
-  const handleMatvtFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleMatvtFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) handleInstallApk(file, 'MATVT Cursor', matvtCtl);
+    if (!file) return;
+    matvtCtl.start();
+    addLog('Installing MATVT Cursor...');
+    try {
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) throw new Error('APK file is empty');
+      const result = await adbService.installApk(apkData);
+      if (!result.success) throw new Error(result.error || 'Install failed');
+
+      addLog('MATVT installed, enabling accessibility service...');
+      // Enable MATVT mouse accessibility service
+      await adbService.runCommand(
+        'settings put secure enabled_accessibility_services com.matvt.app/com.matvt.app.MouseService'
+      );
+      await adbService.runCommand('settings put secure accessibility_enabled 1');
+      addLog('MATVT accessibility service enabled');
+
+      matvtCtl.ok('MATVT installed and accessibility service enabled');
+    } catch (err: any) {
+      matvtCtl.fail(err.message || 'Failed to install MATVT');
+      addLog(`MATVT install failed: ${err.message}`);
+    }
     if (matvtInputRef.current) matvtInputRef.current.value = '';
   };
 
@@ -683,7 +704,7 @@ export default function ToolsPanel() {
         {/* 2. Install MATVT Cursor */}
         <ToolCard
           title="Install MATVT Cursor"
-          description="Select a MATVT APK file from your computer to sideload onto the device."
+          description="Sideload MATVT mouse cursor and auto-enable accessibility service."
           disabled={!connected}
         >
           <input
