@@ -160,19 +160,40 @@ class AdbService {
     this._connected = false;
   }
 
+  private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Command timed out after ${ms / 1000}s`)), ms),
+      ),
+    ]);
+  }
+
   async shell(command: string): Promise<string> {
     if (!this.adb) throw new Error('Not connected');
+
+    const decoder = new TextDecoder();
+    const timeout = 15000; // 15s per command
 
     // Use createSocketAndWait for shell commands — more reliable than subprocess
     // which can break when private fields are transpiled by Next.js bundler
     try {
-      const output = await this.adb.createSocketAndWait(`shell:${command}`);
-      return output.trim();
+      const output: any = await this.withTimeout(
+        this.adb.createSocketAndWait(`shell:${command}`),
+        timeout,
+      );
+      // createSocketAndWait may return Uint8Array or string depending on version
+      const text = typeof output === 'string' ? output : decoder.decode(output as Uint8Array);
+      return text.trim();
     } catch {
       // Fallback: try spawnAndWaitLegacy (uses the "none" protocol)
       try {
-        const output = await this.adb.subprocess.spawnAndWaitLegacy(command);
-        return output.trim();
+        const output: any = await this.withTimeout(
+          this.adb.subprocess.spawnAndWaitLegacy(command),
+          timeout,
+        );
+        const text = typeof output === 'string' ? output : decoder.decode(output as Uint8Array);
+        return text.trim();
       } catch (err: any) {
         throw new Error(`Shell command failed: ${err.message || err}`);
       }
@@ -182,6 +203,18 @@ class AdbService {
   async runCommand(command: string): Promise<AdbCommandResult> {
     try {
       const output = await this.shell(command);
+      // Check for common failure patterns in pm/dpm/settings output
+      const lower = output.toLowerCase();
+      const isFailure =
+        lower.startsWith('failure') ||
+        lower.startsWith('exception') ||
+        lower.includes('failure [') ||
+        lower.includes('exception occurred') ||
+        lower.includes('unknown command') ||
+        lower.includes('inaccessible or not found');
+      if (isFailure) {
+        return { success: false, output, error: output };
+      }
       return { success: true, output };
     } catch (error: any) {
       return { success: false, output: '', error: error.message || String(error) };
