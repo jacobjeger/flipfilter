@@ -5,6 +5,8 @@ import { useApp } from '@/context/AppContext';
 import { adbService } from '@/services/adb';
 import { devices } from '@/data/devices';
 import { getAppName } from '@/data/packages';
+import { generatePdfReport, downloadPdfBlob } from '@/utils/pdf';
+import { generateQrDataUrl } from '@/utils/qr';
 import TierBadge from '@/components/common/TierBadge';
 import StatusIndicator from '@/components/common/StatusIndicator';
 
@@ -24,7 +26,7 @@ export default function SetupWizard() {
     t, connected, connecting, connectPhone, phoneInfo,
     selectedDevice, setSelectedDevice, lockdownLevel, setLockdownLevel,
     preHealthCheck, postHealthCheck, setPreHealthCheck, setPostHealthCheck,
-    deviceCompat, addLog, error, browserSupported
+    deviceCompat, addLog, error, browserSupported, setupLog
   } = useApp();
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -471,7 +473,20 @@ export default function SetupWizard() {
 
               {lockdownLevel === 2 && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-                  <p className="text-sm text-red-700 mb-3">{t.lockdown.level2Warning}</p>
+                  <div className="flex items-start gap-3 mb-3">
+                    <span className="text-red-500 text-2xl leading-none">&#9888;</span>
+                    <div>
+                      <p className="text-sm font-semibold text-red-800 mb-2">Permanent Lockdown Warning</p>
+                      <p className="text-sm text-red-700 mb-2">{t.lockdown.level2Warning}</p>
+                      <ul className="text-xs text-red-600 space-y-1 list-disc list-inside">
+                        <li>ADB will be permanently disabled &mdash; no future remote maintenance possible</li>
+                        <li>USB file transfer will be blocked</li>
+                        <li>Bluetooth will be restricted</li>
+                        <li>This cannot be undone without a full factory reset</li>
+                        <li>You will not be able to make any changes to this device remotely</li>
+                      </ul>
+                    </div>
+                  </div>
                   <div>
                     <label className="text-xs text-red-600 block mb-1">{t.lockdown.level2Confirm}</label>
                     <input
@@ -714,21 +729,49 @@ export default function SetupWizard() {
               <p><strong>Apps Removed:</strong> {removedPackages.length}</p>
               <p><strong>Health Score:</strong> {postHealthCheck?.score ?? preHealthCheck?.score ?? 'N/A'}/100</p>
             </div>
-            <div className="flex justify-center gap-3 mt-6">
+            <div className="flex flex-col sm:flex-row justify-center gap-3 mt-6">
               <button
-                onClick={() => {
-                  // PDF download placeholder
-                  addLog('PDF report downloaded');
-                  alert('PDF export will generate a detailed setup report.');
+                onClick={async () => {
+                  try {
+                    addLog('Generating PDF report...');
+                    const blob = await generatePdfReport({
+                      model: phoneInfo?.model || 'Unknown',
+                      androidVersion: phoneInfo?.androidVersion || 'Unknown',
+                      imei: phoneInfo?.imei || 'Unknown',
+                      lockdownLevel,
+                      setupLog,
+                    });
+                    downloadPdfBlob(blob);
+                    addLog('PDF report downloaded');
+                  } catch (err: any) {
+                    addLog(`PDF report failed: ${err.message}`);
+                  }
                 }}
                 className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700"
               >
                 {t.tools.pdfReport}
               </button>
               <button
-                onClick={() => {
-                  addLog('QR code generated');
-                  alert('QR code will encode the full setup configuration.');
+                onClick={async () => {
+                  try {
+                    addLog('Generating QR code...');
+                    const config = {
+                      model: phoneInfo?.model || selectedDevice?.displayName || 'Unknown',
+                      androidVersion: phoneInfo?.androidVersion || 'Unknown',
+                      lockdownLevel,
+                      appsRemoved: removedPackages.length,
+                      healthScore: postHealthCheck?.score ?? preHealthCheck?.score ?? null,
+                      timestamp: new Date().toISOString(),
+                    };
+                    const dataUrl = await generateQrDataUrl(JSON.stringify(config));
+                    const link = document.createElement('a');
+                    link.href = dataUrl;
+                    link.download = `kosherflip_qr_${new Date().toISOString().split('T')[0]}.png`;
+                    link.click();
+                    addLog('QR code downloaded');
+                  } catch (err: any) {
+                    addLog(`QR code failed: ${err.message}`);
+                  }
                 }}
                 className="bg-gray-200 text-gray-700 px-6 py-2 rounded-lg font-medium hover:bg-gray-300"
               >
@@ -744,7 +787,7 @@ export default function SetupWizard() {
 
   return (
     <div>
-      <h2 className="text-2xl font-bold text-gray-800 mb-6">{t.wizard.title}</h2>
+      <h2 className="text-xl sm:text-2xl font-bold text-gray-800 mb-6">{t.wizard.title}</h2>
 
       {/* Step indicator */}
       <div className="flex items-center gap-1 mb-6 overflow-x-auto pb-2">
@@ -777,7 +820,7 @@ export default function SetupWizard() {
       </div>
 
       {/* Step content */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 min-h-[300px]">
+      <div className="bg-white rounded-xl border border-gray-200 p-4 sm:p-6 min-h-[250px] sm:min-h-[300px]">
         {renderStep()}
       </div>
 

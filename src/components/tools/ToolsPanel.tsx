@@ -3,6 +3,9 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import { adbService } from '@/services/adb';
+import { generatePdfReport, downloadPdfBlob } from '@/utils/pdf';
+import { generateQrDataUrl } from '@/utils/qr';
+import { csvToVcf } from '@/utils/csv';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,130 +101,7 @@ function ActionButton({
   );
 }
 
-// ---------------------------------------------------------------------------
-// CSV -> VCF helper
-// ---------------------------------------------------------------------------
-
-function csvToVcf(csvText: string): string {
-  const lines = csvText.trim().split('\n');
-  if (lines.length < 2) return '';
-
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-  const nameIdx = headers.findIndex(h => h === 'name' || h === 'full name' || h === 'fullname');
-  const firstIdx = headers.findIndex(h => h === 'first name' || h === 'firstname' || h === 'first');
-  const lastIdx = headers.findIndex(h => h === 'last name' || h === 'lastname' || h === 'last');
-  const phoneIdx = headers.findIndex(h => h === 'phone' || h === 'phone number' || h === 'phonenumber' || h === 'mobile' || h === 'telephone');
-  const emailIdx = headers.findIndex(h => h === 'email' || h === 'e-mail');
-
-  const vcfEntries: string[] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c => c.trim());
-    if (!cols.length) continue;
-
-    let fullName = '';
-    let firstName = '';
-    let lastName = '';
-
-    if (nameIdx >= 0) {
-      fullName = cols[nameIdx] || '';
-      const parts = fullName.split(' ');
-      firstName = parts[0] || '';
-      lastName = parts.slice(1).join(' ');
-    } else {
-      firstName = firstIdx >= 0 ? cols[firstIdx] || '' : '';
-      lastName = lastIdx >= 0 ? cols[lastIdx] || '' : '';
-      fullName = `${firstName} ${lastName}`.trim();
-    }
-
-    if (!fullName && phoneIdx < 0) continue;
-
-    const phone = phoneIdx >= 0 ? cols[phoneIdx] || '' : '';
-    const email = emailIdx >= 0 ? cols[emailIdx] || '' : '';
-
-    let entry = 'BEGIN:VCARD\nVERSION:3.0\n';
-    entry += `FN:${fullName}\n`;
-    entry += `N:${lastName};${firstName};;;\n`;
-    if (phone) entry += `TEL;TYPE=CELL:${phone}\n`;
-    if (email) entry += `EMAIL:${email}\n`;
-    entry += 'END:VCARD';
-    vcfEntries.push(entry);
-  }
-
-  return vcfEntries.join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Simple PDF generator (plain text PDF, no external deps beyond jspdf)
-// ---------------------------------------------------------------------------
-
-async function generatePdfReport(data: {
-  model: string;
-  androidVersion: string;
-  imei: string;
-  lockdownLevel: number;
-  setupLog: string[];
-}): Promise<Blob> {
-  const { jsPDF } = await import('jspdf');
-  const doc = new jsPDF();
-  const now = new Date();
-
-  doc.setFontSize(18);
-  doc.setTextColor(30, 58, 138); // blue-900
-  doc.text('KosherFlip Setup Report', 20, 25);
-
-  doc.setFontSize(10);
-  doc.setTextColor(100, 100, 100);
-  doc.text(`Generated: ${now.toLocaleString()}`, 20, 33);
-
-  doc.setDrawColor(59, 130, 246);
-  doc.line(20, 37, 190, 37);
-
-  doc.setFontSize(12);
-  doc.setTextColor(30, 58, 138);
-  doc.text('Device Information', 20, 47);
-
-  doc.setFontSize(10);
-  doc.setTextColor(50, 50, 50);
-  const info = [
-    `Phone Model: ${data.model}`,
-    `Android Version: ${data.androidVersion}`,
-    `IMEI: ${data.imei}`,
-    `Lockdown Level: ${data.lockdownLevel}`,
-  ];
-  info.forEach((line, idx) => {
-    doc.text(line, 25, 55 + idx * 7);
-  });
-
-  let y = 55 + info.length * 7 + 10;
-
-  doc.setFontSize(12);
-  doc.setTextColor(30, 58, 138);
-  doc.text('Setup Log', 20, y);
-  y += 8;
-
-  doc.setFontSize(8);
-  doc.setTextColor(50, 50, 50);
-  for (const entry of data.setupLog) {
-    if (y > 275) {
-      doc.addPage();
-      y = 20;
-    }
-    doc.text(entry, 25, y);
-    y += 5;
-  }
-
-  return doc.output('blob');
-}
-
-// ---------------------------------------------------------------------------
-// QR Code helper
-// ---------------------------------------------------------------------------
-
-async function generateQrDataUrl(text: string): Promise<string> {
-  const QRCode = (await import('qrcode')).default;
-  return QRCode.toDataURL(text, { width: 256, margin: 2 });
-}
+// Shared utilities imported from @/utils/pdf, @/utils/qr, @/utils/csv
 
 // ---------------------------------------------------------------------------
 // Main Component
@@ -243,6 +123,7 @@ export default function ToolsPanel() {
   // Per-tool states
   const [wazeState, wazeCtl] = useToolState();
   const [matvtState, matvtCtl] = useToolState();
+  const [customApkState, customApkCtl] = useToolState();
   const [contactState, contactCtl] = useToolState();
   const [backupState, backupCtl] = useToolState();
   const [restoreState, restoreCtl] = useToolState();
@@ -273,6 +154,7 @@ export default function ToolsPanel() {
   const restoreInputRef = useRef<HTMLInputElement>(null);
   const wazeInputRef = useRef<HTMLInputElement>(null);
   const matvtInputRef = useRef<HTMLInputElement>(null);
+  const customApkInputRef = useRef<HTMLInputElement>(null);
 
   // ------- Actions -------
 
@@ -299,6 +181,14 @@ export default function ToolsPanel() {
       ctl.fail(err.message || `Failed to install ${name}`);
       addLog(`${name} install failed: ${err.message}`);
     }
+  };
+
+  const handleCustomApkFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const name = file.name.replace(/\.apk$/i, '');
+    await handleInstallApk(file, name, customApkCtl);
+    if (customApkInputRef.current) customApkInputRef.current.value = '';
   };
 
   const handleWazeFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -652,12 +542,7 @@ export default function ToolsPanel() {
         lockdownLevel,
         setupLog,
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `kosherflip_report_${new Date().toISOString().split('T')[0]}.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadPdfBlob(blob);
       pdfCtl.ok('PDF report downloaded');
       addLog('PDF report generated');
     } catch (err: any) {
@@ -742,7 +627,30 @@ export default function ToolsPanel() {
           <Feedback state={matvtState} />
         </ToolCard>
 
-        {/* 3. Import Contacts */}
+        {/* 3. Install Any App */}
+        <ToolCard
+          title="Install App"
+          description="Sideload any APK file onto the connected device."
+          disabled={!connected}
+        >
+          <input
+            ref={customApkInputRef}
+            type="file"
+            accept=".apk"
+            onChange={handleCustomApkFile}
+            className="hidden"
+            id="custom-apk-input"
+          />
+          <ActionButton
+            onClick={() => customApkInputRef.current?.click()}
+            disabled={customApkState.loading}
+          >
+            {customApkState.loading ? 'Installing...' : 'Select APK File'}
+          </ActionButton>
+          <Feedback state={customApkState} />
+        </ToolCard>
+
+        {/* 4. Import Contacts */}
         <ToolCard
           title="Import Contacts"
           description="Upload a CSV file to import contacts onto the device in VCF format."

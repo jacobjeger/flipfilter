@@ -160,18 +160,36 @@ class AdbService {
     this._connected = false;
   }
 
+  private withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`Command timed out after ${ms / 1000}s`)), ms),
+      ),
+    ]);
+  }
+
   async shell(command: string): Promise<string> {
     if (!this.adb) throw new Error('Not connected');
 
-    // Use createSocketAndWait for shell commands — more reliable than subprocess
-    // which can break when private fields are transpiled by Next.js bundler
+    const timeout = 15000; // 15s per command
+
+    // Use exec: protocol — runs the command and closes the socket when done.
+    // Unlike shell: which keeps the socket open (causing hangs with pm uninstall etc.),
+    // exec: behaves like a proper subprocess.
     try {
-      const output = await this.adb.createSocketAndWait(`shell:${command}`);
+      const output: string = await this.withTimeout(
+        this.adb.createSocketAndWait(`exec:${command}`),
+        timeout,
+      );
       return output.trim();
     } catch {
-      // Fallback: try spawnAndWaitLegacy (uses the "none" protocol)
+      // Fallback: try shell: protocol (works for simpler commands like getprop)
       try {
-        const output = await this.adb.subprocess.spawnAndWaitLegacy(command);
+        const output: string = await this.withTimeout(
+          this.adb.createSocketAndWait(`shell:${command}`),
+          timeout,
+        )
         return output.trim();
       } catch (err: any) {
         throw new Error(`Shell command failed: ${err.message || err}`);
@@ -182,6 +200,18 @@ class AdbService {
   async runCommand(command: string): Promise<AdbCommandResult> {
     try {
       const output = await this.shell(command);
+      // Check for common failure patterns in pm/dpm/settings output
+      const lower = output.toLowerCase();
+      const isFailure =
+        lower.startsWith('failure') ||
+        lower.startsWith('exception') ||
+        lower.includes('failure [') ||
+        lower.includes('exception occurred') ||
+        lower.includes('unknown command') ||
+        lower.includes('inaccessible or not found');
+      if (isFailure) {
+        return { success: false, output, error: output };
+      }
       return { success: true, output };
     } catch (error: any) {
       return { success: false, output: '', error: error.message || String(error) };
@@ -222,6 +252,18 @@ class AdbService {
       .split('\n')
       .map(line => line.replace('package:', '').trim())
       .filter(Boolean);
+  }
+
+  async enterMaintenanceMode(): Promise<AdbCommandResult> {
+    return this.runCommand(
+      'am broadcast -a com.kosherflip.MAINTENANCE_MODE --ez unlock true -n com.kosherflip/.MaintenanceReceiver'
+    );
+  }
+
+  async exitMaintenanceMode(): Promise<AdbCommandResult> {
+    return this.runCommand(
+      'am broadcast -a com.kosherflip.MAINTENANCE_MODE --ez unlock false -n com.kosherflip/.MaintenanceReceiver'
+    );
   }
 
   async uninstallPackage(packageName: string): Promise<AdbCommandResult> {

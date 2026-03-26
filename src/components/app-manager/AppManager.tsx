@@ -124,6 +124,10 @@ export default function AppManager() {
     setOperating(true);
     setProgress({ current: 0, total: toRemove.length, packageName: '' });
 
+    // Enter maintenance mode — temporarily lifts Guardian restrictions
+    addLog('Entering maintenance mode (lifting restrictions)...');
+    await adbService.enterMaintenanceMode();
+
     let successCount = 0;
     let errorCount = 0;
 
@@ -146,6 +150,10 @@ export default function AppManager() {
       }
     }
 
+    // Exit maintenance mode — re-apply all restrictions
+    addLog('Exiting maintenance mode (re-applying restrictions)...');
+    await adbService.exitMaintenanceMode();
+
     setSelectedPackages(new Set());
     setOperating(false);
     setProgress({ current: 0, total: 0, packageName: '' });
@@ -167,6 +175,9 @@ export default function AppManager() {
 
     setOperating(true);
     setProgress({ current: 0, total: toRestore.length, packageName: '' });
+
+    // Enter maintenance mode — temporarily lifts Guardian restrictions
+    await adbService.enterMaintenanceMode();
 
     let successCount = 0;
     let errorCount = 0;
@@ -193,6 +204,9 @@ export default function AppManager() {
         addLog(`Error restoring ${pkg}: ${err.message}`);
       }
     }
+
+    // Exit maintenance mode — re-apply restrictions
+    await adbService.exitMaintenanceMode();
 
     setSelectedPackages(new Set());
     setOperating(false);
