@@ -290,6 +290,15 @@ export default function SetupWizard() {
               <div>
                 <div className="text-gray-400 text-6xl mb-4">📱</div>
                 <p className="text-gray-600 mb-4">{t.connection.usbPrompt}</p>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 max-w-md mx-auto">
+                  <p className="text-amber-800 text-sm font-medium mb-1">Before connecting:</p>
+                  <ol className="text-amber-700 text-xs space-y-1 text-left">
+                    <li>1. Run <code className="bg-amber-100 px-1 rounded font-mono">adb kill-server</code> in your terminal</li>
+                    <li>2. Enable USB Debugging on the phone</li>
+                    <li>3. Connect phone via USB cable</li>
+                    <li>4. Accept the &quot;Allow USB debugging&quot; prompt on the phone</li>
+                  </ol>
+                </div>
                 <button
                   onClick={connectPhone}
                   disabled={connecting}
