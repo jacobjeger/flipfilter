@@ -257,25 +257,31 @@ class AdbService {
       }
 
       const remotePath = '/data/local/tmp/install.apk';
-      const bytes = new Uint8Array(apkData);
 
-      // Push APK via base64-encoded shell commands in chunks
-      // This avoids the sync API which has issues with Next.js bundling
-      const CHUNK_SIZE = 48000; // ~64KB base64 per chunk
-      const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+      // Use ADB sync protocol to push file — much faster than shell-based transfer
+      // We call adbSyncPushV1 directly to bypass the mkdir workaround
+      // (which uses subprocess private methods broken by Next.js bundler)
+      const { ReadableStream: AdbReadableStream } = await import('@yume-chan/stream-extra');
+      const { adbSyncPushV1 } = await import('@yume-chan/adb/esm/commands/sync/push.js');
+      const sync = await this.adb.sync();
 
-      // Clear any previous file
-      await this.shell(`rm -f ${remotePath}`).catch(() => {});
+      try {
+        const fileStream = new AdbReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(apkData));
+            controller.close();
+          },
+        });
 
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = bytes.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        let b64 = '';
-        for (let j = 0; j < chunk.length; j++) {
-          b64 += String.fromCharCode(chunk[j]);
-        }
-        b64 = btoa(b64);
-        const op = i === 0 ? '>' : '>>';
-        await this.shell(`echo '${b64}' | base64 -d ${op} ${remotePath}`);
+        await adbSyncPushV1({
+          socket: sync._socket,
+          filename: remotePath,
+          file: fileStream,
+          permission: 0o644,
+          mtime: (Date.now() / 1000) | 0,
+        });
+      } finally {
+        await sync.dispose();
       }
 
       // Install the APK
@@ -381,17 +387,28 @@ class AdbService {
       if (!this.adb) throw new Error('Not connected');
       const remotePath = '/sdcard/contacts.vcf';
 
-      // Push VCF via base64 shell command
-      const b64 = btoa(vcfContent);
-      const CHUNK_SIZE = 48000;
-      const totalChunks = Math.ceil(b64.length / CHUNK_SIZE);
+      const { ReadableStream: AdbReadableStream } = await import('@yume-chan/stream-extra');
+      const { adbSyncPushV1 } = await import('@yume-chan/adb/esm/commands/sync/push.js');
+      const sync = await this.adb.sync();
+      const encoder = new TextEncoder();
 
-      await this.shell(`rm -f ${remotePath}`).catch(() => {});
+      try {
+        const fileStream = new AdbReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(vcfContent));
+            controller.close();
+          },
+        });
 
-      for (let i = 0; i < totalChunks; i++) {
-        const chunk = b64.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-        const op = i === 0 ? '>' : '>>';
-        await this.shell(`echo '${chunk}' | base64 -d ${op} ${remotePath}`);
+        await adbSyncPushV1({
+          socket: sync._socket,
+          filename: remotePath,
+          file: fileStream,
+          permission: 0o644,
+          mtime: (Date.now() / 1000) | 0,
+        });
+      } finally {
+        await sync.dispose();
       }
 
       return this.runCommand(`am start -a android.intent.action.VIEW -d file://${remotePath} -t text/x-vcard`);
