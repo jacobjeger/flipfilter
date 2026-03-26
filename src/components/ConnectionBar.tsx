@@ -52,7 +52,12 @@ export default function ConnectionBar() {
         )}
 
         {!connected && !connecting && (
-          <span className="text-sm text-gray-500">{t.connection.usbPrompt}</span>
+          <div className="flex flex-col gap-1">
+            <span className="text-sm text-gray-500">{t.connection.usbPrompt}</span>
+            <span className="text-xs text-amber-600">
+              Before connecting: run <code className="bg-amber-100 px-1 rounded font-mono">adb kill-server</code> in your terminal to release the USB device
+            </span>
+          </div>
         )}
 
         {/* Error */}

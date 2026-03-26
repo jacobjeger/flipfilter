@@ -1,0 +1,58 @@
+name: Build Guardian APK
+
+on:
+  push:
+    paths:
+      - 'guardian-apk/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Debug APK
+        working-directory: guardian-apk
+        run: |
+          chmod +x gradlew 2>/dev/null || gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kosherflip-guardian
+          path: guardian-apk/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Copy APK to public folder
+        run: |
+          cp guardian-apk/app/build/outputs/apk/debug/app-debug.apk public/kosherflip-guardian.apk
+
+      - name: Create Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: guardian-v1.0.${{ github.run_number }}
+          name: Guardian APK v1.0.${{ github.run_number }}
+          files: guardian-apk/app/build/outputs/apk/debug/app-debug.apk
+          body: |
+            KosherFlip Guardian APK — Device Owner for kosher phone lockdown.
+
+            Install via KosherFlip wizard Step 7, or manually:
+            ```
+            adb install app-debug.apk
+            adb shell dpm set-device-owner com.kosherflip/.AdminReceiver
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

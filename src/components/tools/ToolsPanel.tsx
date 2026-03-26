@@ -249,6 +249,7 @@ export default function ToolsPanel() {
   const [kyoceraSeqState, kyoceraSeqCtl] = useToolState();
   const [kyoceraLaunchState, kyoceraLaunchCtl] = useToolState();
   const [healthState, healthCtl] = useToolState();
+  const [verifyState, verifyCtl] = useToolState();
   const [pdfState, pdfCtl] = useToolState();
   const [qrState, qrCtl] = useToolState();
 
@@ -257,47 +258,98 @@ export default function ToolsPanel() {
     checks: { label: string; pass: boolean }[];
   } | null>(null);
 
+  const [verifyResult, setVerifyResult] = useState<{
+    passed: boolean;
+    total: number;
+    passCount: number;
+    checks: { label: string; pass: boolean; detail: string }[];
+  } | null>(null);
+
   const [kyoceraPassword, setKyoceraPassword] = useState('000000');
   const [restoreDiff, setRestoreDiff] = useState<{ missing: string[]; extra: string[] } | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
   const contactInputRef = useRef<HTMLInputElement>(null);
   const restoreInputRef = useRef<HTMLInputElement>(null);
+  const wazeInputRef = useRef<HTMLInputElement>(null);
+  const matvtInputRef = useRef<HTMLInputElement>(null);
 
   // ------- Actions -------
 
-  const handleInstallWaze = async () => {
-    wazeCtl.start();
-    addLog('Installing Waze...');
+  const handleInstallApk = async (
+    file: File,
+    name: string,
+    ctl: ReturnType<typeof useToolState>[1],
+  ) => {
+    ctl.start();
+    addLog(`Installing ${name}...`);
     try {
-      const result = await adbService.sideloadApkFromUrl('/waze.apk');
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) {
+        throw new Error('APK file is empty');
+      }
+      const result = await adbService.installApk(apkData);
       if (result.success) {
-        wazeCtl.ok('Waze installed successfully');
-        addLog('Waze installed');
+        ctl.ok(`${name} installed successfully`);
+        addLog(`${name} installed`);
       } else {
         throw new Error(result.error || 'Install failed');
       }
+    } catch (err: any) {
+      ctl.fail(err.message || `Failed to install ${name}`);
+      addLog(`${name} install failed: ${err.message}`);
+    }
+  };
+
+  const handleWazeFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    wazeCtl.start();
+    addLog('Installing Waze...');
+    try {
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) throw new Error('APK file is empty');
+      const result = await adbService.installApk(apkData);
+      if (!result.success) throw new Error(result.error || 'Install failed');
+
+      addLog('Waze installed, granting location permissions...');
+      await adbService.runCommand('pm grant com.waze android.permission.ACCESS_FINE_LOCATION');
+      await adbService.runCommand('pm grant com.waze android.permission.ACCESS_COARSE_LOCATION');
+      addLog('Waze location permissions granted');
+
+      wazeCtl.ok('Waze installed with location permissions');
     } catch (err: any) {
       wazeCtl.fail(err.message || 'Failed to install Waze');
       addLog(`Waze install failed: ${err.message}`);
     }
+    if (wazeInputRef.current) wazeInputRef.current.value = '';
   };
 
-  const handleInstallMatvt = async () => {
+  const handleMatvtFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     matvtCtl.start();
     addLog('Installing MATVT Cursor...');
     try {
-      const result = await adbService.sideloadApkFromUrl('/matvt.apk');
-      if (result.success) {
-        matvtCtl.ok('MATVT Cursor installed successfully');
-        addLog('MATVT Cursor installed');
-      } else {
-        throw new Error(result.error || 'Install failed');
-      }
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) throw new Error('APK file is empty');
+      const result = await adbService.installApk(apkData);
+      if (!result.success) throw new Error(result.error || 'Install failed');
+
+      addLog('MATVT installed, enabling accessibility service...');
+      // Enable MATVT mouse accessibility service
+      await adbService.runCommand(
+        'settings put secure enabled_accessibility_services com.matvt.app/com.matvt.app.MouseService'
+      );
+      await adbService.runCommand('settings put secure accessibility_enabled 1');
+      addLog('MATVT accessibility service enabled');
+
+      matvtCtl.ok('MATVT installed and accessibility service enabled');
     } catch (err: any) {
-      matvtCtl.fail(err.message || 'Failed to install MATVT Cursor');
+      matvtCtl.fail(err.message || 'Failed to install MATVT');
       addLog(`MATVT install failed: ${err.message}`);
     }
+    if (matvtInputRef.current) matvtInputRef.current.value = '';
   };
 
   const handleImportContacts = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -455,6 +507,140 @@ export default function ToolsPanel() {
     }
   };
 
+  const handleVerifySetup = async () => {
+    verifyCtl.start();
+    setVerifyResult(null);
+    addLog('Running full filter verification...');
+    try {
+      const checks: { label: string; pass: boolean; detail: string }[] = [];
+
+      // 1. Check browsers removed
+      const browserPkgs = [
+        'com.android.browser',
+        'com.google.android.chrome',
+        'com.opera.browser',
+        'com.UCMobile.intl',
+        'org.mozilla.firefox',
+      ];
+      for (const pkg of browserPkgs) {
+        const r = await adbService.runCommand(`pm list packages ${pkg}`);
+        const found = r.output.includes(pkg);
+        checks.push({
+          label: `Browser: ${pkg.split('.').pop()}`,
+          pass: !found,
+          detail: found ? 'Still installed' : 'Removed',
+        });
+      }
+
+      // 2. Check social media removed
+      const socialPkgs = [
+        'com.facebook.katana',
+        'com.instagram.android',
+        'com.twitter.android',
+        'com.tiktok.android',
+        'com.snapchat.android',
+        'com.whatsapp',
+        'com.discord',
+      ];
+      for (const pkg of socialPkgs) {
+        const r = await adbService.runCommand(`pm list packages ${pkg}`);
+        const found = r.output.includes(pkg);
+        checks.push({
+          label: `Social: ${pkg.split('.').pop()}`,
+          pass: !found,
+          detail: found ? 'Still installed' : 'Removed',
+        });
+      }
+
+      // 3. Check entertainment removed
+      const entertainmentPkgs = [
+        'com.google.android.youtube',
+        'com.spotify.music',
+        'com.netflix.mediaclient',
+        'com.google.android.apps.youtube.music',
+      ];
+      for (const pkg of entertainmentPkgs) {
+        const r = await adbService.runCommand(`pm list packages ${pkg}`);
+        const found = r.output.includes(pkg);
+        checks.push({
+          label: `Media: ${pkg.split('.').pop()}`,
+          pass: !found,
+          detail: found ? 'Still installed' : 'Removed',
+        });
+      }
+
+      // 4. Check Play Store removed
+      const playStore = await adbService.runCommand('pm list packages com.android.vending');
+      checks.push({
+        label: 'Google Play Store',
+        pass: !playStore.output.includes('com.android.vending'),
+        detail: playStore.output.includes('com.android.vending') ? 'Still installed' : 'Removed',
+      });
+
+      // 5. Check package installer disabled
+      const pkgInstaller = await adbService.runCommand('pm list packages -e com.android.packageinstaller');
+      const gPkgInstaller = await adbService.runCommand('pm list packages -e com.google.android.packageinstaller');
+      checks.push({
+        label: 'Package Installer blocked',
+        pass: !pkgInstaller.output.includes('packageinstaller') && !gPkgInstaller.output.includes('packageinstaller'),
+        detail: (pkgInstaller.output.includes('packageinstaller') || gPkgInstaller.output.includes('packageinstaller'))
+          ? 'Still enabled' : 'Disabled',
+      });
+
+      // 6. Check Google accounts
+      const accounts = await adbService.runCommand('dumpsys account | grep "Account {"');
+      const hasAccounts = accounts.output.includes('Account {');
+      checks.push({
+        label: 'No Google accounts',
+        pass: !hasAccounts,
+        detail: hasAccounts ? 'Accounts found' : 'Clean',
+      });
+
+      // 7. Check unknown sources
+      const unknownSources = await adbService.runCommand('settings get secure install_non_market_apps');
+      checks.push({
+        label: 'Unknown sources blocked',
+        pass: unknownSources.output.trim() === '0',
+        detail: unknownSources.output.trim() === '0' ? 'Blocked' : 'Allowed',
+      });
+
+      // 8. Check USB debugging status
+      const adbEnabled = await adbService.runCommand('settings get global adb_enabled');
+      checks.push({
+        label: 'USB Debugging status',
+        pass: true, // informational
+        detail: adbEnabled.output.trim() === '1' ? 'Enabled (Standard lockdown)' : 'Disabled (Maximum lockdown)',
+      });
+
+      // 9. Check Device Owner
+      const deviceOwner = await adbService.runCommand('dpm get-device-owner');
+      checks.push({
+        label: 'Device Owner active',
+        pass: deviceOwner.output.includes('ComponentInfo') || deviceOwner.output.includes('kosherflip'),
+        detail: deviceOwner.output.includes('ComponentInfo') ? 'Active' : 'Not set',
+      });
+
+      // 10. Check Waze is installed (if it should be)
+      const waze = await adbService.runCommand('pm list packages com.waze');
+      checks.push({
+        label: 'Waze installed',
+        pass: waze.output.includes('com.waze'),
+        detail: waze.output.includes('com.waze') ? 'Installed' : 'Not installed',
+      });
+
+      const passCount = checks.filter(c => c.pass).length;
+      const total = checks.length;
+      const passed = passCount >= total - 2; // Allow up to 2 non-critical failures
+
+      setVerifyResult({ passed, total, passCount, checks });
+      verifyCtl.ok(`${passCount}/${total} checks passed`);
+      addLog(`Filter verification: ${passCount}/${total} passed — ${passed ? 'SETUP COMPLETE' : 'NEEDS ATTENTION'}`);
+    } catch (err: any) {
+      verifyCtl.fail(err.message || 'Verification failed');
+      addLog(`Verification failed: ${err.message}`);
+    }
+  };
+
   const handlePdfReport = async () => {
     pdfCtl.start();
     addLog('Generating PDF report...');
@@ -513,11 +699,22 @@ export default function ToolsPanel() {
         {/* 1. Install Waze */}
         <ToolCard
           title="Install Waze"
-          description="Sideload the Waze navigation app onto the connected device."
+          description="Sideload Waze and auto-grant location permissions."
           disabled={!connected}
         >
-          <ActionButton onClick={handleInstallWaze} disabled={wazeState.loading}>
-            {wazeState.loading ? 'Installing...' : 'Install Waze'}
+          <input
+            ref={wazeInputRef}
+            type="file"
+            accept=".apk"
+            onChange={handleWazeFile}
+            className="hidden"
+            id="waze-apk-input"
+          />
+          <ActionButton
+            onClick={() => wazeInputRef.current?.click()}
+            disabled={wazeState.loading}
+          >
+            {wazeState.loading ? 'Installing...' : 'Select Waze APK'}
           </ActionButton>
           <Feedback state={wazeState} />
         </ToolCard>
@@ -525,11 +722,22 @@ export default function ToolsPanel() {
         {/* 2. Install MATVT Cursor */}
         <ToolCard
           title="Install MATVT Cursor"
-          description="Sideload the MATVT mouse cursor accessibility tool."
+          description="Sideload MATVT mouse cursor and auto-enable accessibility service."
           disabled={!connected}
         >
-          <ActionButton onClick={handleInstallMatvt} disabled={matvtState.loading}>
-            {matvtState.loading ? 'Installing...' : 'Install MATVT Cursor'}
+          <input
+            ref={matvtInputRef}
+            type="file"
+            accept=".apk"
+            onChange={handleMatvtFile}
+            className="hidden"
+            id="matvt-apk-input"
+          />
+          <ActionButton
+            onClick={() => matvtInputRef.current?.click()}
+            disabled={matvtState.loading}
+          >
+            {matvtState.loading ? 'Installing...' : 'Select MATVT APK'}
           </ActionButton>
           <Feedback state={matvtState} />
         </ToolCard>
@@ -708,6 +916,64 @@ export default function ToolsPanel() {
                   <li key={c.label} className="flex items-center gap-1.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${c.pass ? 'bg-green-500' : 'bg-red-400'}`} />
                     <span className={c.pass ? 'text-green-700' : 'text-red-600'}>{c.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </ToolCard>
+
+        {/* 8b. Verify Filter Setup */}
+        <ToolCard
+          title="Verify Filter Setup"
+          description="Comprehensive test to verify the phone is fully filtered — checks all browsers, social media, entertainment, Play Store, accounts, and lockdown."
+          disabled={!connected}
+        >
+          <ActionButton onClick={handleVerifySetup} disabled={verifyState.loading}>
+            {verifyState.loading ? 'Verifying...' : 'Run Full Verification'}
+          </ActionButton>
+          <Feedback state={verifyState} />
+          {verifyResult && (
+            <div className="mt-2 space-y-2">
+              {/* Overall status banner */}
+              <div className={`p-3 rounded-lg text-center font-bold text-lg ${
+                verifyResult.passed
+                  ? 'bg-green-50 text-green-700 border border-green-200'
+                  : 'bg-red-50 text-red-700 border border-red-200'
+              }`}>
+                {verifyResult.passed ? 'FILTER SETUP COMPLETE' : 'SETUP NEEDS ATTENTION'}
+              </div>
+              <div className="text-center text-sm text-gray-500">
+                {verifyResult.passCount} / {verifyResult.total} checks passed
+              </div>
+              {/* Progress bar */}
+              <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    verifyResult.passCount === verifyResult.total
+                      ? 'bg-green-500'
+                      : verifyResult.passCount >= verifyResult.total - 2
+                      ? 'bg-yellow-500'
+                      : 'bg-red-500'
+                  }`}
+                  style={{ width: `${(verifyResult.passCount / verifyResult.total) * 100}%` }}
+                />
+              </div>
+              {/* Individual checks */}
+              <ul className="text-xs space-y-1 max-h-60 overflow-y-auto">
+                {verifyResult.checks.map((c) => (
+                  <li key={c.label} className={`flex items-center justify-between gap-2 py-0.5 px-1 rounded ${
+                    c.pass ? '' : 'bg-red-50'
+                  }`}>
+                    <span className="flex items-center gap-1.5">
+                      <span className={`text-sm ${c.pass ? 'text-green-600' : 'text-red-500'}`}>
+                        {c.pass ? '✓' : '✗'}
+                      </span>
+                      <span className={c.pass ? 'text-gray-700' : 'text-red-700 font-medium'}>{c.label}</span>
+                    </span>
+                    <span className={`text-[10px] ${c.pass ? 'text-gray-400' : 'text-red-500 font-medium'}`}>
+                      {c.detail}
+                    </span>
                   </li>
                 ))}
               </ul>

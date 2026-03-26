@@ -163,23 +163,20 @@ class AdbService {
   async shell(command: string): Promise<string> {
     if (!this.adb) throw new Error('Not connected');
 
-    const process = await this.adb.subprocess.spawn(command);
-    let output = '';
-    const reader = process.stdout.getReader();
-
+    // Use createSocketAndWait for shell commands — more reliable than subprocess
+    // which can break when private fields are transpiled by Next.js bundler
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          output += typeof value === 'string' ? value : new TextDecoder().decode(value);
-        }
+      const output = await this.adb.createSocketAndWait(`shell:${command}`);
+      return output.trim();
+    } catch {
+      // Fallback: try spawnAndWaitLegacy (uses the "none" protocol)
+      try {
+        const output = await this.adb.subprocess.spawnAndWaitLegacy(command);
+        return output.trim();
+      } catch (err: any) {
+        throw new Error(`Shell command failed: ${err.message || err}`);
       }
-    } finally {
-      reader.releaseLock();
     }
-
-    return output.trim();
   }
 
   async runCommand(command: string): Promise<AdbCommandResult> {
@@ -255,33 +252,43 @@ class AdbService {
   async installApk(apkData: ArrayBuffer): Promise<AdbCommandResult> {
     try {
       if (!this.adb) throw new Error('Not connected');
-      const sync = await this.adb.sync();
+      if (apkData.byteLength === 0) {
+        return { success: false, output: '', error: 'APK file is empty' };
+      }
+
       const remotePath = '/data/local/tmp/install.apk';
 
-      await sync.write({
-        filename: remotePath,
-        file: new ReadableStream({
-          start(controller: ReadableStreamDefaultController) {
+      // Use ADB sync protocol to push file — much faster than shell-based transfer
+      // We call adbSyncPushV1 directly to bypass the mkdir workaround
+      // (which uses subprocess private methods broken by Next.js bundler)
+      const { ReadableStream: AdbReadableStream } = await import('@yume-chan/stream-extra');
+      const { adbSyncPushV1 } = await import('@yume-chan/adb/esm/commands/sync/push.js');
+      const sync = await this.adb.sync();
+
+      try {
+        const fileStream = new AdbReadableStream<Uint8Array>({
+          start(controller) {
             controller.enqueue(new Uint8Array(apkData));
             controller.close();
-          }
-        }),
-      });
-      if (sync.dispose) await sync.dispose();
+          },
+        });
 
+        await adbSyncPushV1({
+          socket: sync._socket,
+          filename: remotePath,
+          file: fileStream,
+          permission: 0o644,
+          mtime: (Date.now() / 1000) | 0,
+        });
+      } finally {
+        await sync.dispose();
+      }
+
+      // Install the APK
       const result = await this.runCommand(`pm install ${remotePath}`);
-      await this.runCommand(`rm ${remotePath}`);
+      // Clean up
+      await this.runCommand(`rm -f ${remotePath}`);
       return result;
-    } catch (error: any) {
-      return { success: false, output: '', error: error.message || String(error) };
-    }
-  }
-
-  async sideloadApkFromUrl(url: string): Promise<AdbCommandResult> {
-    try {
-      const response = await fetch(url);
-      const apkData = await response.arrayBuffer();
-      return this.installApk(apkData);
     } catch (error: any) {
       return { success: false, output: '', error: error.message || String(error) };
     }
@@ -294,6 +301,8 @@ class AdbService {
       'pm disable-user --user 0 com.google.android.packageinstaller',
       'pm disable-user --user 0 com.android.browser',
       'pm disable-user --user 0 com.google.android.chrome',
+      'settings put secure install_non_market_apps 0',
+      'settings put global install_non_market_apps 0',
     ];
     const results: AdbCommandResult[] = [];
     for (const cmd of commands) {
@@ -378,20 +387,31 @@ class AdbService {
   async pushContacts(vcfContent: string): Promise<AdbCommandResult> {
     try {
       if (!this.adb) throw new Error('Not connected');
-      const sync = await this.adb.sync();
       const remotePath = '/sdcard/contacts.vcf';
+
+      const { ReadableStream: AdbReadableStream } = await import('@yume-chan/stream-extra');
+      const { adbSyncPushV1 } = await import('@yume-chan/adb/esm/commands/sync/push.js');
+      const sync = await this.adb.sync();
       const encoder = new TextEncoder();
 
-      await sync.write({
-        filename: remotePath,
-        file: new ReadableStream({
-          start(controller: ReadableStreamDefaultController) {
+      try {
+        const fileStream = new AdbReadableStream<Uint8Array>({
+          start(controller) {
             controller.enqueue(encoder.encode(vcfContent));
             controller.close();
-          }
-        }),
-      });
-      if (sync.dispose) await sync.dispose();
+          },
+        });
+
+        await adbSyncPushV1({
+          socket: sync._socket,
+          filename: remotePath,
+          file: fileStream,
+          permission: 0o644,
+          mtime: (Date.now() / 1000) | 0,
+        });
+      } finally {
+        await sync.dispose();
+      }
 
       return this.runCommand(`am start -a android.intent.action.VIEW -d file://${remotePath} -t text/x-vcard`);
     } catch (error: any) {

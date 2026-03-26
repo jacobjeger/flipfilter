@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useApp } from '@/context/AppContext';
 import { adbService } from '@/services/adb';
 import { devices } from '@/data/devices';
@@ -35,6 +35,8 @@ export default function SetupWizard() {
   const [selectedPackages, setSelectedPackages] = useState<Set<string>>(new Set());
   const [lockdownResults, setLockdownResults] = useState<{ cmd: string; success: boolean }[]>([]);
   const [removedPackages, setRemovedPackages] = useState<string[]>([]);
+  const [guardianInstalled, setGuardianInstalled] = useState(false);
+  const guardianInputRef = useRef<HTMLInputElement>(null);
 
   const updateStepResult = (step: number, result: StepResult) => {
     setStepResults(prev => ({ ...prev, [step]: result }));
@@ -126,28 +128,63 @@ export default function SetupWizard() {
     }
   };
 
+  const handleGuardianApk = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setLoading(true);
+    try {
+      addLog('Installing Guardian APK...');
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) throw new Error('APK file is empty');
+      const result = await adbService.installApk(apkData);
+      if (result.success) {
+        setGuardianInstalled(true);
+        addLog('Guardian APK installed');
+      } else {
+        throw new Error(result.error || 'Install failed');
+      }
+    } catch (err: any) {
+      addLog(`Guardian APK install failed: ${err.message}`);
+      updateStepResult(6, { status: 'error', message: `APK install failed: ${err.message}` });
+    } finally {
+      setLoading(false);
+      if (guardianInputRef.current) guardianInputRef.current.value = '';
+    }
+  };
+
   const setDeviceOwner = async () => {
     setLoading(true);
     try {
-      // Sideload guardian APK first
-      addLog('Sideloading KosherFlip Guardian APK...');
-      const apkResult = await adbService.sideloadApkFromUrl('/kosherflip-guardian.apk');
-
-      if (!apkResult.success) {
-        addLog(`Guardian APK install note: ${apkResult.error || 'May need manual install'}`);
-      } else {
-        addLog('Guardian APK installed');
-      }
-
       // Set device owner
+      addLog('Setting Device Owner...');
       const result = await adbService.setDeviceOwner('com.kosherflip/.AdminReceiver');
       if (result.success) {
         updateStepResult(6, { status: 'success', message: 'Device Owner set successfully' });
         addLog('Device Owner set: com.kosherflip/.AdminReceiver');
       } else {
-        updateStepResult(6, { status: 'error', message: result.error || 'Failed to set Device Owner' });
-        addLog(`Device Owner failed: ${result.error}`);
+        // Provide helpful error messages
+        const err = result.error || '';
+        let message = err;
+        if (err.includes('already has a device owner')) {
+          message = 'Device Owner is already set on this phone.';
+        } else if (err.includes('Not allowed to set the device owner')) {
+          message = 'Cannot set Device Owner. Make sure: (1) Guardian APK is installed, (2) No Google accounts are on the phone, (3) Phone has been factory reset.';
+        } else if (err.includes('ComponentInfo') || err.includes('not found')) {
+          message = 'Guardian APK not found on phone. Please install it first using the button above.';
+        }
+        updateStepResult(6, { status: 'error', message });
+        addLog(`Device Owner failed: ${message}`);
       }
+
+      // Set the lockdown level for the Guardian APK
+      addLog(`Setting lockdown level to ${lockdownLevel}...`);
+      await adbService.runCommand(`settings put global kosherflip_lockdown_level ${lockdownLevel}`);
+
+      // Also disable unknown sources
+      addLog('Blocking unknown sources...');
+      await adbService.runCommand('settings put secure install_non_market_apps 0');
+      await adbService.runCommand('settings put global install_non_market_apps 0');
+      addLog('Unknown sources blocked');
     } catch (err: any) {
       updateStepResult(6, { status: 'error', message: err.message });
     } finally {
@@ -205,25 +242,12 @@ export default function SetupWizard() {
   };
 
   const installApps = async () => {
-    setLoading(true);
-    try {
-      addLog('Installing Waze...');
-      const wazeResult = await adbService.sideloadApkFromUrl('/waze.apk');
-      addLog(`Waze: ${wazeResult.success ? 'OK' : wazeResult.error}`);
-
-      addLog('Installing MATVT...');
-      const matvtResult = await adbService.sideloadApkFromUrl('/matvt.apk');
-      addLog(`MATVT: ${matvtResult.success ? 'OK' : matvtResult.error}`);
-
-      updateStepResult(9, {
-        status: wazeResult.success && matvtResult.success ? 'success' : 'warning',
-        message: 'App installation completed'
-      });
-    } catch (err: any) {
-      updateStepResult(9, { status: 'error', message: err.message });
-    } finally {
-      setLoading(false);
-    }
+    // App installation is handled via file upload — mark step as ready
+    updateStepResult(9, {
+      status: 'success',
+      message: 'Use the Tools panel to sideload Waze and MATVT APKs from your computer'
+    });
+    addLog('Step 10: Use Tools > Install Waze / Install MATVT to sideload APKs');
   };
 
   const renderHealthCheckResults = (check: typeof preHealthCheck) => {
@@ -270,6 +294,15 @@ export default function SetupWizard() {
               <div>
                 <div className="text-gray-400 text-6xl mb-4">📱</div>
                 <p className="text-gray-600 mb-4">{t.connection.usbPrompt}</p>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 max-w-md mx-auto">
+                  <p className="text-amber-800 text-sm font-medium mb-1">Before connecting:</p>
+                  <ol className="text-amber-700 text-xs space-y-1 text-left">
+                    <li>1. Run <code className="bg-amber-100 px-1 rounded font-mono">adb kill-server</code> in your terminal</li>
+                    <li>2. Enable USB Debugging on the phone</li>
+                    <li>3. Connect phone via USB cable</li>
+                    <li>4. Accept the &quot;Allow USB debugging&quot; prompt on the phone</li>
+                  </ol>
+                </div>
                 <button
                   onClick={connectPhone}
                   disabled={connecting}
@@ -460,22 +493,53 @@ export default function SetupWizard() {
           <div className="py-4">
             {deviceCompat?.supportsDeviceOwner ? (
               <div>
-                <p className="text-gray-600 mb-4">Set up Device Owner for full reset protection.</p>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 text-sm">
-                  <p className="text-blue-800">This will:</p>
-                  <ul className="text-blue-700 mt-1 space-y-0.5">
-                    <li>1. Install KosherFlip Guardian APK (hidden, no launcher icon)</li>
-                    <li>2. Set it as Device Owner via ADB</li>
-                    <li>3. Enforce lockdown restrictions</li>
-                  </ul>
+                <p className="text-gray-600 mb-4">Set up Device Owner for full reset protection and block unknown sources.</p>
+
+                {/* Step 1: Install Guardian APK */}
+                <div className="mb-4">
+                  <h4 className="font-medium text-gray-800 mb-2">Step 1: Install Guardian APK</h4>
+                  <p className="text-sm text-gray-500 mb-2">Select the KosherFlip Guardian APK file to install on the phone.</p>
+                  <input
+                    ref={guardianInputRef}
+                    type="file"
+                    accept=".apk"
+                    onChange={handleGuardianApk}
+                    className="hidden"
+                    id="guardian-apk-input"
+                  />
+                  <button
+                    onClick={() => guardianInputRef.current?.click()}
+                    disabled={loading}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                      guardianInstalled
+                        ? 'bg-green-100 text-green-700 border border-green-300'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 border border-gray-300'
+                    } disabled:opacity-50`}
+                  >
+                    {loading ? 'Installing...' : guardianInstalled ? '✓ Guardian APK Installed' : 'Select Guardian APK'}
+                  </button>
                 </div>
-                <button
-                  onClick={setDeviceOwner}
-                  disabled={loading}
-                  className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {loading ? t.common.loading : 'Set Device Owner'}
-                </button>
+
+                {/* Step 2: Set Device Owner */}
+                <div className="mb-4">
+                  <h4 className="font-medium text-gray-800 mb-2">Step 2: Set Device Owner</h4>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 text-sm">
+                    <p className="text-blue-800 font-medium">Requirements:</p>
+                    <ul className="text-blue-700 mt-1 space-y-0.5 text-xs">
+                      <li>- Guardian APK must be installed first</li>
+                      <li>- No Google accounts on the phone</li>
+                      <li>- Phone should be freshly factory reset</li>
+                    </ul>
+                  </div>
+                  <button
+                    onClick={setDeviceOwner}
+                    disabled={loading}
+                    className="bg-blue-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50"
+                  >
+                    {loading ? t.common.loading : 'Set Device Owner & Block Unknown Sources'}
+                  </button>
+                </div>
+
                 {stepResults[6] && (
                   <div className={`mt-3 p-3 rounded-lg ${stepResults[6].status === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
                     {stepResults[6].message}
