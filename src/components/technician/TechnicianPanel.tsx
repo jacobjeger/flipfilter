@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/context/AppContext';
+import { adbService } from '@/services/adb';
 import { devices } from '@/data/devices';
 
 // ---------------------------------------------------------------------------
@@ -226,6 +227,10 @@ export default function TechnicianPanel() {
   // ---- Changelog state ----
   const [changelog, setChangelog] = useState<ChangelogEntry[]>([]);
 
+  // ---- Apply state ----
+  const [applying, setApplying] = useState(false);
+  const [applyStatus, setApplyStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+
   // ---- Load persisted data ----
   useEffect(() => {
     setProfiles(loadProfiles());
@@ -317,18 +322,55 @@ export default function TechnicianPanel() {
   );
 
   const applyProfile = useCallback(
-    (profile: SavedProfile) => {
+    async (profile: SavedProfile) => {
       if (!connected || !phoneInfo) {
         addLog('Cannot apply profile: no phone connected');
         return;
       }
+      setApplying(true);
+      setApplyStatus(null);
       addLog(`--- Applying profile "${profile.name}" v${profile.version} ---`);
       addLog(`Target device: ${phoneInfo.model} (${phoneInfo.serialNumber})`);
       addLog(`Model in profile: ${profile.modelId}`);
       addLog(`Lockdown level: ${profile.lockdownLevel}`);
-      addLog(`Packages to remove (${profile.packagesToRemove.length}):`);
-      profile.packagesToRemove.forEach((pkg) => addLog(`  - ${pkg}`));
-      addLog('Profile application started (packages will be uninstalled via ADB)');
+
+      let errors = 0;
+
+      // Uninstall packages
+      addLog(`Removing ${profile.packagesToRemove.length} packages...`);
+      for (const pkg of profile.packagesToRemove) {
+        const result = await adbService.uninstallPackage(pkg);
+        if (result.success) {
+          addLog(`  Removed: ${pkg}`);
+        } else {
+          addLog(`  Failed: ${pkg} — ${result.error || 'unknown error'}`);
+          errors++;
+        }
+      }
+
+      // Set lockdown level
+      addLog(`Setting lockdown level ${profile.lockdownLevel}...`);
+      await adbService.runCommand(`settings put global kosherflip_lockdown_level ${profile.lockdownLevel}`);
+
+      // Block unknown sources
+      await adbService.runCommand('settings put secure install_non_market_apps 0');
+      await adbService.runCommand('settings put global install_non_market_apps 0');
+
+      // Apply lockdown commands
+      if (profile.lockdownLevel === 2) {
+        await adbService.applyLockdownLevel2();
+        addLog('Applied Level 2 (maximum) lockdown');
+      } else {
+        await adbService.applyLockdownLevel1();
+        addLog('Applied Level 1 (standard) lockdown');
+      }
+
+      const statusMsg = errors > 0
+        ? `Profile applied with ${errors} package error(s)`
+        : 'Profile applied successfully';
+      addLog(`--- ${statusMsg} ---`);
+      setApplyStatus({ ok: errors === 0, msg: statusMsg });
+      setApplying(false);
 
       // Record changelog
       const entry: ChangelogEntry = {
@@ -362,7 +404,7 @@ export default function TechnicianPanel() {
     setBatchQueue((prev) => prev.filter((b) => b.id !== id));
   }, []);
 
-  const applyBatch = useCallback(() => {
+  const applyBatch = useCallback(async () => {
     if (!connected || !phoneInfo) {
       addLog('Cannot run batch: no phone connected');
       return;
@@ -374,17 +416,55 @@ export default function TechnicianPanel() {
     }
 
     addLog(`--- Batch apply: "${profile.name}" v${profile.version} ---`);
+    addLog(`Connected device serial: ${phoneInfo.serialNumber}`);
 
-    setBatchQueue((prev) =>
-      prev.map((item) => {
-        if (item.status === 'pending') {
-          addLog(`Queued: ${item.serial} — waiting for device connection`);
-          return { ...item, status: 'processing' as const, message: 'Waiting for device...' };
-        }
-        return item;
-      }),
+    // Find the queue item matching the currently connected device
+    const matchingItem = batchQueue.find(
+      (item) => item.status === 'pending' && item.serial === phoneInfo.serialNumber,
     );
-  }, [connected, phoneInfo, activeProfileId, profiles, addLog]);
+
+    if (!matchingItem) {
+      addLog('No pending queue item matches the connected device serial. Connect the next device in the queue.');
+      // Mark non-matching pending items with a waiting message
+      setBatchQueue((prev) =>
+        prev.map((item) =>
+          item.status === 'pending'
+            ? { ...item, message: 'Waiting — connect this device' }
+            : item,
+        ),
+      );
+      return;
+    }
+
+    // Mark as processing
+    setBatchQueue((prev) =>
+      prev.map((item) =>
+        item.id === matchingItem.id
+          ? { ...item, status: 'processing' as const, message: 'Applying profile...' }
+          : item,
+      ),
+    );
+
+    // Apply the profile
+    try {
+      await applyProfile(profile);
+      setBatchQueue((prev) =>
+        prev.map((item) =>
+          item.id === matchingItem.id
+            ? { ...item, status: 'done' as const, message: 'Profile applied' }
+            : item,
+        ),
+      );
+    } catch (err: any) {
+      setBatchQueue((prev) =>
+        prev.map((item) =>
+          item.id === matchingItem.id
+            ? { ...item, status: 'error' as const, message: err.message || 'Failed' }
+            : item,
+        ),
+      );
+    }
+  }, [connected, phoneInfo, activeProfileId, profiles, addLog, batchQueue, applyProfile]);
 
   // ---- QR helpers ----
   const generateQR = useCallback(
@@ -485,10 +565,10 @@ export default function TechnicianPanel() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     onClick={() => applyProfile(profile)}
-                    disabled={!connected}
+                    disabled={!connected || applying}
                     className="px-3 py-1.5 text-xs font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
-                    Apply
+                    {applying ? 'Applying...' : 'Apply'}
                   </button>
                   <button
                     onClick={() => generateQR(profile.id)}
@@ -630,6 +710,13 @@ export default function TechnicianPanel() {
             + New Profile
           </button>
         )}
+
+        {/* Apply status feedback */}
+        {applyStatus && (
+          <div className={`mt-3 p-3 rounded-lg text-sm ${applyStatus.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-200'}`}>
+            {applyStatus.msg}
+          </div>
+        )}
       </SectionCard>
 
       {/* ================================================================ */}
@@ -711,14 +798,19 @@ export default function TechnicianPanel() {
             <p className="text-sm text-gray-400">Queue is empty.</p>
           )}
 
+          {/* Batch info */}
+          <p className="text-xs text-gray-400">
+            Connect a device, then click &quot;Apply to Connected&quot;. The profile will be applied to the queue item whose serial matches the connected phone.
+          </p>
+
           {/* Batch controls */}
           <div className="flex gap-2">
             <button
               onClick={applyBatch}
-              disabled={batchQueue.length === 0 || !connected}
+              disabled={batchQueue.length === 0 || !connected || applying}
               className="px-4 py-2 text-sm font-medium rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
-              Apply to All
+              {applying ? 'Applying...' : 'Apply to Connected'}
             </button>
             <button
               onClick={() => setBatchQueue([])}

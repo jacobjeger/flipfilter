@@ -22,22 +22,52 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Decode keystore
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > guardian-apk/release.keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
+      - name: Build Release APK
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        working-directory: guardian-apk
+        run: |
+          chmod +x gradlew 2>/dev/null || gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          ./gradlew assembleRelease
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/guardian-apk/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
       - name: Build Debug APK
+        if: ${{ secrets.KEYSTORE_BASE64 == '' }}
         working-directory: guardian-apk
         run: |
           chmod +x gradlew 2>/dev/null || gradle wrapper --gradle-version 8.5
           chmod +x gradlew
           ./gradlew assembleDebug
 
+      - name: Determine APK path
+        id: apk
+        run: |
+          if [ -f guardian-apk/app/build/outputs/apk/release/app-release.apk ]; then
+            echo "path=guardian-apk/app/build/outputs/apk/release/app-release.apk" >> $GITHUB_OUTPUT
+            echo "name=kosherflip-guardian.apk" >> $GITHUB_OUTPUT
+          else
+            echo "path=guardian-apk/app/build/outputs/apk/debug/app-debug.apk" >> $GITHUB_OUTPUT
+            echo "name=kosherflip-guardian.apk" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: kosherflip-guardian
-          path: guardian-apk/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.apk.outputs.path }}
 
       - name: Copy APK to public folder
-        run: |
-          cp guardian-apk/app/build/outputs/apk/debug/app-debug.apk public/kosherflip-guardian.apk
+        run: cp ${{ steps.apk.outputs.path }} public/kosherflip-guardian.apk
 
       - name: Create Release
         if: github.ref == 'refs/heads/main'
@@ -45,13 +75,13 @@ jobs:
         with:
           tag_name: guardian-v1.0.${{ github.run_number }}
           name: Guardian APK v1.0.${{ github.run_number }}
-          files: guardian-apk/app/build/outputs/apk/debug/app-debug.apk
+          files: ${{ steps.apk.outputs.path }}
           body: |
             KosherFlip Guardian APK — Device Owner for kosher phone lockdown.
 
             Install via KosherFlip wizard Step 7, or manually:
             ```
-            adb install app-debug.apk
+            adb install kosherflip-guardian.apk
             adb shell dpm set-device-owner com.kosherflip/.AdminReceiver
             ```
         env:

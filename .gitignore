@@ -34,3 +34,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# android signing
+*.keystore
+*.jks
+guardian-apk/local.properties
+
+# android build
+guardian-apk/.gradle/
+guardian-apk/app/build/
+guardian-apk/build/
+guardian-apk/gradlew
+guardian-apk/gradlew.bat
+guardian-apk/gradle/
