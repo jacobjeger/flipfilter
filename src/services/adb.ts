@@ -301,6 +301,8 @@ class AdbService {
       'pm disable-user --user 0 com.google.android.packageinstaller',
       'pm disable-user --user 0 com.android.browser',
       'pm disable-user --user 0 com.google.android.chrome',
+      'settings put secure install_non_market_apps 0',
+      'settings put global install_non_market_apps 0',
     ];
     const results: AdbCommandResult[] = [];
     for (const cmd of commands) {
