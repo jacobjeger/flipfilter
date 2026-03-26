@@ -301,9 +301,27 @@ export default function ToolsPanel() {
     }
   };
 
-  const handleWazeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleWazeFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) handleInstallApk(file, 'Waze', wazeCtl);
+    if (!file) return;
+    wazeCtl.start();
+    addLog('Installing Waze...');
+    try {
+      const apkData = await file.arrayBuffer();
+      if (apkData.byteLength === 0) throw new Error('APK file is empty');
+      const result = await adbService.installApk(apkData);
+      if (!result.success) throw new Error(result.error || 'Install failed');
+
+      addLog('Waze installed, granting location permissions...');
+      await adbService.runCommand('pm grant com.waze android.permission.ACCESS_FINE_LOCATION');
+      await adbService.runCommand('pm grant com.waze android.permission.ACCESS_COARSE_LOCATION');
+      addLog('Waze location permissions granted');
+
+      wazeCtl.ok('Waze installed with location permissions');
+    } catch (err: any) {
+      wazeCtl.fail(err.message || 'Failed to install Waze');
+      addLog(`Waze install failed: ${err.message}`);
+    }
     if (wazeInputRef.current) wazeInputRef.current.value = '';
   };
 
@@ -681,7 +699,7 @@ export default function ToolsPanel() {
         {/* 1. Install Waze */}
         <ToolCard
           title="Install Waze"
-          description="Select a Waze APK file from your computer to sideload onto the device."
+          description="Sideload Waze and auto-grant location permissions."
           disabled={!connected}
         >
           <input
