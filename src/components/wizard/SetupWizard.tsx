@@ -176,6 +176,10 @@ export default function SetupWizard() {
         addLog(`Device Owner failed: ${message}`);
       }
 
+      // Set the lockdown level for the Guardian APK
+      addLog(`Setting lockdown level to ${lockdownLevel}...`);
+      await adbService.runCommand(`settings put global kosherflip_lockdown_level ${lockdownLevel}`);
+
       // Also disable unknown sources
       addLog('Blocking unknown sources...');
       await adbService.runCommand('settings put secure install_non_market_apps 0');
